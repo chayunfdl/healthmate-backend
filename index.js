@@ -1,9 +1,10 @@
-// --- File: index.js (Backend) ---
+// --- File: index.js (Backend dengan Penyimpanan Persisten di Render) ---
 
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
-// const bcrypt = require('bcryptjs'); // Direkomendasikan untuk hashing password, install dengan `npm install bcryptjs`
+const path = require('path'); // Mengimpor modul 'path'
+const fs = require('fs');     // Mengimpor modul 'file system'
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -12,14 +13,25 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Setup Database SQLite
-const db = new sqlite3.Database('./gym_finder.db', (err) => {
+// --- PERBAIKAN: PATH DATABASE UNTUK PENYIMPANAN PERSISTEN DI RENDER ---
+const dataDir = '/var/data';
+const dbPath = path.join(dataDir, 'gym_finder.db');
+
+// Pastikan direktori penyimpanan ada
+if (!fs.existsSync(dataDir)){
+    fs.mkdirSync(dataDir, { recursive: true });
+    console.log(`Created persistent data directory at: ${dataDir}`);
+}
+
+// Gunakan dbPath untuk membuat koneksi database yang persisten
+const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
-    console.error("Error opening database", err.message);
+    console.error("Error opening persistent database", err.message);
   } else {
-    console.log("Connected to the SQLite database.");
+    console.log("Connected to the persistent SQLite database at:", dbPath);
+    
     db.serialize(() => {
-      // Skema tabel dengan penambahan latitude dan longitude
+      // Skema tabel (tidak berubah)
       db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE,
@@ -38,7 +50,7 @@ const db = new sqlite3.Database('./gym_finder.db', (err) => {
         longitude REAL
       )`);
       
-      // Seeding Data dengan Koordinat
+      // Seeding Data (hanya berjalan jika tabel gyms kosong)
       db.get("SELECT COUNT(*) as count FROM gyms", (err, row) => {
         if (err) {
             console.error("Error checking gyms table:", err.message);
@@ -90,79 +102,51 @@ const db = new sqlite3.Database('./gym_finder.db', (err) => {
 
 
 // =================================
-// SERVICE: AUTHENTICATION (KODE DIPULIHKAN)
+// SERVICE: AUTHENTICATION (Sudah dirapikan)
 // =================================
-
-// Endpoint untuk registrasi user baru
 app.post('/api/auth/register', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
-
-  // PENTING: Dalam aplikasi production, Anda WAJIB melakukan hashing pada password.
-  // Contoh dengan bcrypt:
-  // const salt = bcrypt.genSaltSync(10);
-  // const hashedPassword = bcrypt.hashSync(password, salt);
-  // const sql = "INSERT INTO users (username, password) VALUES (?, ?)";
-  // db.run(sql, [username, hashedPassword], function(err) { ... });
-
   const sql = "INSERT INTO users (username, password) VALUES (?, ?)";
   db.run(sql, [username, password], function(err) {
     if (err) {
-      if (err.message.includes('UNIQUE constraint failed')) {
-        return res.status(409).json({ error: 'Username already exists' });
+      if (err.errno === 19) {
+        return res.status(409).json({ error: "Username already exists" });
       }
       return res.status(500).json({ error: err.message });
     }
-    res.status(201).json({ message: "User registered successfully", userId: this.lastID });
+    res.status(201).json({ id: this.lastID, username: username });
   });
 });
 
-// Endpoint untuk login user
 app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: "Username and password are required" });
-  }
-
-  const sql = "SELECT * FROM users WHERE username = ?";
-  db.get(sql, [username], (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ error: "Username and password are required" });
     }
-    if (!user) {
-      return res.status(404).json({ error: "Invalid username or password" });
-    }
+    const sql = "SELECT * FROM users WHERE username = ?";
+    db.get(sql, [username], (err, user) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!user) return res.status(401).json({ error: "Invalid credentials" });
 
-    // PENTING: Bandingkan password yang di-hash, bukan plain text.
-    // Contoh dengan bcrypt:
-    // const isMatch = bcrypt.compareSync(password, user.password);
-    // if (!isMatch) {
-    //   return res.status(401).json({ error: "Invalid username or password" });
-    // }
-    
-    // Perbandingan password plain text (tidak aman, hanya untuk contoh)
-    if (user.password !== password) {
-        return res.status(401).json({ error: "Invalid username or password" });
-    }
-
-    // Buat token sederhana (dalam aplikasi nyata, gunakan JWT)
-    const token = Buffer.from(`${username}:${Date.now()}`).toString('base64');
-    const updateSql = "UPDATE users SET token = ? WHERE id = ?";
-    
-    db.run(updateSql, [token, user.id], (updateErr) => {
-      if (updateErr) {
-        return res.status(500).json({ error: updateErr.message });
-      }
-      res.json({ message: "Login successful", token: token });
+        const isMatch = (password === user.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
+        
+        const token = 'token-' + user.username + '-' + Date.now();
+        const updateSql = "UPDATE users SET token = ? WHERE id = ?";
+        db.run(updateSql, [token, user.id], (updateErr) => {
+            if (updateErr) return res.status(500).json({ error: updateErr.message });
+            res.json({ message: "Login successful", token: token });
+        });
     });
-  });
 });
-
 
 // =================================
-// SERVICE: LOCATION (Tetap sama)
+// SERVICE: LOCATION (Tidak berubah)
 // =================================
 app.get('/api/location', (req, res) => {
   const sql = "SELECT id, name FROM locations";
@@ -174,29 +158,37 @@ app.get('/api/location', (req, res) => {
 
 
 // =================================
-// SERVICE: GYM (Diperbarui untuk menyertakan koordinat)
+// SERVICE: GYM (Tidak berubah)
 // =================================
+const addGmapsUrl = (gym) => {
+    if (!gym || gym.latitude == null || gym.longitude == null) return gym;
+    return {
+      ...gym,
+      gmaps_url: `https://www.google.com/maps/search/?api=1&query=${gym.latitude},${gym.longitude}`
+    };
+};
 
-// GET /api/gym (Diperbarui)
 app.get('/api/gym', (req, res) => {
   const sql = "SELECT id, nama, location, latitude, longitude FROM gyms";
   db.all(sql, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    const validGyms = rows.filter(gym => gym.latitude != null && gym.longitude != null);
+    const gymsWithGmaps = validGyms.map(addGmapsUrl);
+    res.json(gymsWithGmaps);
   });
 });
 
-// GET /api/gym/search/:location (Diperbarui)
 app.get('/api/gym/search/:location', (req, res) => {
   const { location } = req.params;
   const sql = "SELECT id, nama, location, latitude, longitude FROM gyms WHERE location = ?";
   db.all(sql, [location], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    const validGyms = rows.filter(gym => gym.latitude != null && gym.longitude != null);
+    const gymsWithGmaps = validGyms.map(addGmapsUrl);
+    res.json(gymsWithGmaps);
   });
 });
 
-// GET /api/gym/:id (Diperbarui)
 app.get('/api/gym/:id', (req, res) => {
   if (isNaN(req.params.id)) {
       return res.status(400).json({ error: 'Invalid ID format.' });
@@ -205,22 +197,29 @@ app.get('/api/gym/:id', (req, res) => {
   const sql = "SELECT id, nama, location, latitude, longitude FROM gyms WHERE id = ?";
   db.get(sql, [id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
-    if (!row) return res.status(404).json({ error: "Gym not found" });
-    res.json(row);
+    if (!row || row.latitude == null || row.longitude == null) {
+      return res.status(404).json({ error: "Gym not found or has invalid location data" });
+    }
+    res.json(addGmapsUrl(row));
   });
 });
 
-// POST /api/gym (Diperbarui untuk menerima koordinat)
 app.post('/api/gym', (req, res) => {
-  // Diasumsikan ada middleware untuk verifikasi token
-  const { name, location, latitude, longitude } = req.body;
-  if (!name || !location || latitude === undefined || longitude === undefined) {
+  const { nama, location, latitude, longitude } = req.body;
+  if (!nama || !location || latitude === undefined || longitude === undefined) {
     return res.status(400).json({ error: "Name, location, latitude, and longitude are required" });
   }
   const sql = "INSERT INTO gyms (nama, location, latitude, longitude) VALUES (?, ?, ?, ?)";
-  db.run(sql, [name, location, latitude, longitude], function(err) {
+  db.run(sql, [nama, location, latitude, longitude], function(err) {
       if (err) return res.status(500).json({ error: err.message });
-      res.status(201).json({ id: this.lastID, nama: name, location: location, latitude, longitude });
+      const newGym = {
+        id: this.lastID,
+        nama: nama,
+        location: location,
+        latitude: latitude,
+        longitude: longitude
+      };
+      res.status(201).json(addGmapsUrl(newGym));
   });
 });
 
