@@ -1,10 +1,10 @@
-// --- File: index.js (Backend dengan Penyimpanan Persisten di Render) ---
+// --- File: index.js (Lengkap dengan Perbaikan untuk Lingkungan Lokal) ---
 
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
-const path = require('path'); // Mengimpor modul 'path'
-const fs = require('fs');     // Mengimpor modul 'file system'
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -13,22 +13,20 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// --- PERBAIKAN: PATH DATABASE UNTUK PENYIMPANAN PERSISTEN DI RENDER ---
-const dataDir = '/var/data';
-const dbPath = path.join(dataDir, 'gym_finder.db');
+// --- PERBAIKAN: PATH DATABASE DIUBAH UNTUK LINGKUNGAN LOKAL ---
+// Kode untuk server hosting seperti Render telah dinonaktifkan (dikomentari).
+// const dataDir = '/var/data';
+// const dbPath = path.join(dataDir, 'gym_finder.db');
 
-// Pastikan direktori penyimpanan ada
-if (!fs.existsSync(dataDir)){
-    fs.mkdirSync(dataDir, { recursive: true });
-    console.log(`Created persistent data directory at: ${dataDir}`);
-}
+// Path ini akan membuat file 'gym_finder.db' di direktori yang sama dengan index.js
+const dbPath = 'gym_finder.db';
 
 // Gunakan dbPath untuk membuat koneksi database yang persisten
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
-    console.error("Error opening persistent database", err.message);
+    console.error("Error opening local database", err.message);
   } else {
-    console.log("Connected to the persistent SQLite database at:", dbPath);
+    console.log("Connected to the local SQLite database at:", dbPath);
     
     db.serialize(() => {
       // Skema tabel (tidak berubah)
@@ -50,37 +48,55 @@ const db = new sqlite3.Database(dbPath, (err) => {
         longitude REAL
       )`);
       
-      // Seeding Data (hanya berjalan jika tabel gyms kosong)
+      // --- SEEDING PENGGUNA DEFAULT ---
+      // Bagian ini akan membuat user 'dian' jika belum ada di database.
+      const defaultUsername = 'dian';
+      const defaultPassword = 'password123'; // Password untuk testing
+
+      db.get("SELECT COUNT(*) as count FROM users WHERE username = ?", [defaultUsername], (err, row) => {
+          if (err) {
+              console.error("Error checking for default user:", err.message);
+              return;
+          }
+          if (row.count === 0) {
+              console.log(`User '${defaultUsername}' not found. Creating a default user...`);
+              const sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+              db.run(sql, [defaultUsername, defaultPassword], function(err) {
+                  if (err) {
+                      console.error("Error seeding default user:", err.message);
+                  } else {
+                      console.log(`Default user '${defaultUsername}' created successfully.`);
+                  }
+              });
+          } else {
+              console.log(`Default user '${defaultUsername}' already exists. Skipping creation.`);
+          }
+      });
+
+      // Seeding Data Gyms (hanya berjalan jika tabel gyms kosong)
       db.get("SELECT COUNT(*) as count FROM gyms", (err, row) => {
         if (err) {
             console.error("Error checking gyms table:", err.message);
             return;
         }
         if (row && row.count === 0) {
-          console.log("Database is empty, seeding initial data with coordinates...");
+          console.log("Database is empty, seeding initial gym data...");
           
           const locationsToSeed = ['Sidoarjo', 'Surabaya', 'Malang'];
           const gymsToSeed = [
-            // Sidoarjo (Pusat: -7.44, 112.71)
+            // Sidoarjo
             { nama: 'Fitness First Sidoarjo', location: 'Sidoarjo', lat: -7.4451, lon: 112.7153 },
             { nama: 'Gold\'s Gym Sidoarjo', location: 'Sidoarjo', lat: -7.4389, lon: 112.7201 },
             { nama: 'One GOR Sidoarjo', location: 'Sidoarjo', lat: -7.4478, lon: 112.7183 },
             { nama: 'Deltasari Sport Center', location: 'Sidoarjo', lat: -7.3691, lon: 112.7405 },
             { nama: 'Planet Fitness Pondok Tjandra', location: 'Sidoarjo', lat: -7.3482, lon: 112.7663 },
-
-            // Surabaya (Pusat: -7.25, 112.75)
+            // Surabaya
             { nama: 'Atlas Sports Club', location: 'Surabaya', lat: -7.2798, lon: 112.7565 },
             { nama: 'Urban Athletes', location: 'Surabaya', lat: -7.2885, lon: 112.7382 },
             { nama: 'Celebrity Fitness Galaxy Mall', location: 'Surabaya', lat: -7.2759, lon: 112.7845 },
-            { nama: 'Gold\'s Gym Grand City Mall', location: 'Surabaya', lat: -7.2581, lon: 112.7519 },
-            { nama: 'Fitness First Tunjungan Plaza', location: 'Surabaya', lat: -7.2612, lon: 112.7408 },
-
-            // Malang (Pusat: -7.98, 112.62)
+            // Malang
             { nama: 'Malang Fitness Center', location: 'Malang', lat: -7.9754, lon: 112.6231 },
             { nama: 'Universitas Brawijaya Sport Center', location: 'Malang', lat: -7.9536, lon: 112.6146 },
-            { nama: 'MX Mall Fitness', location: 'Malang', lat: -7.9667, lon: 112.6171 },
-            { nama: 'Ijen Fitness Corner', location: 'Malang', lat: -7.9722, lon: 112.6205 },
-            { nama: 'Soehat Gym Center', location: 'Malang', lat: -7.9497, lon: 112.6158 },
           ];
 
           const locationStmt = db.prepare("INSERT INTO locations (name) VALUES (?)");
@@ -91,9 +107,9 @@ const db = new sqlite3.Database(dbPath, (err) => {
           gymsToSeed.forEach(gym => gymStmt.run(gym.nama, gym.location, gym.lat, gym.lon));
           gymStmt.finalize();
           
-          console.log("Seeding complete.");
+          console.log("Seeding gyms complete.");
         } else {
-          console.log("Database already contains data, skipping seed.");
+          console.log("Database already contains gym data, skipping seed.");
         }
       });
     });
@@ -102,7 +118,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
 
 
 // =================================
-// SERVICE: AUTHENTICATION (Sudah dirapikan)
+// SERVICE: AUTHENTICATION
 // =================================
 app.post('/api/auth/register', (req, res) => {
   const { username, password } = req.body;
@@ -146,7 +162,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // =================================
-// SERVICE: LOCATION (Tidak berubah)
+// SERVICE: LOCATION
 // =================================
 app.get('/api/location', (req, res) => {
   const sql = "SELECT id, name FROM locations";
@@ -158,7 +174,7 @@ app.get('/api/location', (req, res) => {
 
 
 // =================================
-// SERVICE: GYM (Tidak berubah)
+// SERVICE: GYM
 // =================================
 const addGmapsUrl = (gym) => {
     if (!gym || gym.latitude == null || gym.longitude == null) return gym;
